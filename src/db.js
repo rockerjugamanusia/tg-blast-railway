@@ -1,19 +1,18 @@
-import path from "path";
 import fs from "fs";
+import path from "path";
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
 
-const DATA_DIR = process.env.DATA_DIR || "/app/data";
-const DB_FILE  = process.env.DB_FILE || "crm.sqlite";
-export const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, DB_FILE);
-console.log("DB PATH =", DB_PATH);
+export async function openDb() {
+  const dataDir = process.env.DATA_DIR || "/app/data";
+  const dbFile = process.env.DB_FILE || "blast.sqlite";
+  fs.mkdirSync(dataDir, { recursive: true });
 
-export async function initDb() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const dbPath = path.join(dataDir, dbFile);
 
   const db = await open({
-    filename: DB_PATH,
-    driver: sqlite3.Database
+    filename: dbPath,
+    driver: sqlite3.Database,
   });
 
   await db.exec(`
@@ -22,72 +21,66 @@ export async function initDb() {
       username    TEXT,
       first_name  TEXT,
       last_name   TEXT,
+      started     INTEGER DEFAULT 0,
+      status      TEXT DEFAULT 'ok',         -- ok | blocked | not_found | fail
+      last_error  TEXT,
       created_at  TEXT DEFAULT (datetime('now')),
-      updated_at  TEXT DEFAULT (datetime('now')),
-
-      started_at  TEXT,
-      blocked_at  TEXT,
-      last_ok_at  TEXT,
-      last_err_at TEXT,
-      last_err    TEXT
+      updated_at  TEXT DEFAULT (datetime('now'))
     );
   `);
 
-  await db.exec(`CREATE INDEX IF NOT EXISTS idx_users_started ON users(started_at);`);
   return db;
 }
 
-export async function upsertUser(db, tgUser) {
+export async function upsertUser(db, from) {
+  if (!from?.id) return;
+
+  const user_id = Number(from.id);
+  const username = from.username || null;
+  const first_name = from.first_name || null;
+  const last_name = from.last_name || null;
+
   await db.run(
     `
-    INSERT INTO users (user_id, username, first_name, last_name, started_at, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+    INSERT INTO users (user_id, username, first_name, last_name, started, updated_at)
+    VALUES (?, ?, ?, ?, 1, datetime('now'))
     ON CONFLICT(user_id) DO UPDATE SET
       username=excluded.username,
       first_name=excluded.first_name,
       last_name=excluded.last_name,
-      updated_at=datetime('now'),
-      started_at=COALESCE(users.started_at, excluded.started_at)
+      started=1,
+      updated_at=datetime('now');
     `,
-    [tgUser.id, tgUser.username || null, tgUser.first_name || null, tgUser.last_name || null]
+    [user_id, username, first_name, last_name]
   );
 }
 
-export async function getTargets(db) {
-  return db.all(`
-    SELECT user_id FROM users
-    WHERE started_at IS NOT NULL AND blocked_at IS NULL
-    ORDER BY user_id ASC
-  `);
-}
-
-export async function markOk(db, user_id) {
+export async function markResult(db, userId, status, lastError = null) {
   await db.run(
-    `UPDATE users SET last_ok_at=datetime('now'), last_err=NULL, last_err_at=NULL, updated_at=datetime('now') WHERE user_id=?`,
-    [user_id]
+    `
+    UPDATE users
+    SET status=?, last_error=?, updated_at=datetime('now')
+    WHERE user_id=?;
+    `,
+    [status, lastError, Number(userId)]
   );
 }
 
-export async function markErr(db, user_id, text) {
-  await db.run(
-    `UPDATE users SET last_err=?, last_err_at=datetime('now'), updated_at=datetime('now') WHERE user_id=?`,
-    [String(text).slice(0, 500), user_id]
-  );
-}
-
-export async function markBlocked(db, user_id, text) {
-  await db.run(
-    `UPDATE users SET blocked_at=datetime('now'), last_err=?, last_err_at=datetime('now'), updated_at=datetime('now') WHERE user_id=?`,
-    [String(text).slice(0, 500), user_id]
-  );
+export async function listTargets(db) {
+  // hanya yang sudah pernah /start
+  return db.all(`SELECT user_id FROM users WHERE started=1`);
 }
 
 export async function stats(db) {
-  const total = await db.get(`SELECT COUNT(*) n FROM users`);
-  const started = await db.get(`SELECT COUNT(*) n FROM users WHERE started_at IS NOT NULL`);
-  const blocked = await db.get(`SELECT COUNT(*) n FROM users WHERE blocked_at IS NOT NULL`);
-  const active = await db.get(`SELECT COUNT(*) n FROM users WHERE started_at IS NOT NULL AND blocked_at IS NULL`);
-  return { total: total.n, started: started.n, blocked: blocked.n, active: active.n };
+  const total = (await db.get(`SELECT COUNT(*) as c FROM users`))?.c || 0;
+  const started = (await db.get(`SELECT COUNT(*) as c FROM users WHERE started=1`))?.c || 0;
+
+  const ok = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='ok'`))?.c || 0;
+  const blocked = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='blocked'`))?.c || 0;
+  const not_found = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='not_found'`))?.c || 0;
+  const fail = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='fail'`))?.c || 0;
+
+  return { total, started, ok, blocked, notFound: not_found, fail };
 }
 
 export async function exportUsers(db) {
