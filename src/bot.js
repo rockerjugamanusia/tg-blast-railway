@@ -1,7 +1,9 @@
 import { Telegraf } from "telegraf";
-import { isAdmin, errText, delay } from "./utils.js";
+import { isAdmin, errText } from "./utils.js";
 import { upsertUser, stats, exportUsers } from "./db.js";
 import { blastAll } from "./blast.js";
+import { delay } from "./utils.js";
+
 
 export function createBot(db) {
   const token = process.env.BOT_TOKEN;
