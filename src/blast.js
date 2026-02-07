@@ -1,83 +1,64 @@
-import { sleep, pickErrorText, isBlockedError, isChatNotFound, isRateLimit, retryAfterMs } from "./utils.js";
-import { getBlastTargets, markOk, markErr, markBlocked } from "./db.js";
+import { sleep, errText, isBlocked, isChatNotFound, isRateLimit, retryAfterMs } from "./utils.js";
+import { getTargets, markOk, markErr, markBlocked } from "./db.js";
 
-const DEFAULT_DELAY_MS = Number(process.env.BLAST_DELAY_MS || 80); // aman: ~12 msg/detik
-const MAX_FAILS_STOP = Number(process.env.BLAST_MAX_FAILS_STOP || 0); // 0 = jangan stop
+const DELAY = Number(process.env.BLAST_DELAY_MS || 120); // aman
+const PROGRESS_EVERY = Number(process.env.PROGRESS_EVERY || 25);
 
-async function sendWithRetry(bot, chatId, text) {
+async function sendMsg(bot, chatId, text) {
   try {
     await bot.telegram.sendMessage(chatId, text, { disable_web_page_preview: true });
     return { ok: true };
-  } catch (err) {
-    // rate limit 429 → tunggu lalu retry sekali
-    if (isRateLimit(err)) {
-      const waitMs = retryAfterMs(err);
-      if (waitMs > 0) {
+  } catch (e) {
+    if (isRateLimit(e)) {
+      const waitMs = retryAfterMs(e);
+      if (waitMs) {
         await sleep(waitMs);
         await bot.telegram.sendMessage(chatId, text, { disable_web_page_preview: true });
         return { ok: true, waitedMs: waitMs };
       }
     }
-    return { ok: false, err };
+    return { ok: false, err: e };
   }
 }
 
-export async function blastAll({ bot, db, text, onProgress }) {
-  const targets = await getBlastTargets(db);
+export async function blastAll(bot, db, text, onProgress) {
+  const targets = await getTargets(db);
 
-  const report = {
+  const rep = {
     total: targets.length,
     ok: 0,
     fail: 0,
     blocked: 0,
-    notFound: 0,
-    details: [], // simpan ringkas
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
+    notFound: 0
   };
-
-  let failsInRow = 0;
 
   for (let i = 0; i < targets.length; i++) {
     const user_id = targets[i].user_id;
 
-    const res = await sendWithRetry(bot, user_id, text);
+    const r = await sendMsg(bot, user_id, text);
 
-    if (res.ok) {
-      report.ok++;
-      failsInRow = 0;
+    if (r.ok) {
+      rep.ok++;
       await markOk(db, user_id);
     } else {
-      report.fail++;
-      failsInRow++;
-      const errText = pickErrorText(res.err);
+      rep.fail++;
+      const t = errText(r.err);
 
-      if (isBlockedError(errText)) {
-        report.blocked++;
-        await markBlocked(db, user_id, errText);
-      } else if (isChatNotFound(errText)) {
-        report.notFound++;
-        // chat not found sering berarti user belum start / ID salah
-        await markErr(db, user_id, errText);
+      if (isBlocked(t)) {
+        rep.blocked++;
+        await markBlocked(db, user_id, t);
       } else {
-        await markErr(db, user_id, errText);
+        if (isChatNotFound(t)) rep.notFound++;
+        await markErr(db, user_id, t);
       }
-
-      report.details.push({ user_id, err: errText.slice(0, 120) });
     }
 
-    if (typeof onProgress === "function") {
-      await onProgress({ i: i + 1, total: targets.length, report });
+    if (onProgress && ((i + 1) % PROGRESS_EVERY === 0 || i + 1 === targets.length)) {
+      await onProgress(i + 1, targets.length, rep);
     }
 
-    if (MAX_FAILS_STOP > 0 && failsInRow >= MAX_FAILS_STOP) {
-      report.details.push({ system: true, err: `Stop: ${failsInRow} gagal berturut-turut` });
-      break;
-    }
-
-    await sleep(DEFAULT_DELAY_MS);
+    await sleep(DELAY);
   }
 
-  report.finishedAt = new Date().toISOString();
-  return report;
+  return rep;
 }
