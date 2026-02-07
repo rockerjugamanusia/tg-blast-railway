@@ -1,7 +1,15 @@
-export const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+export function isAdmin(ctx) {
+  const adminId = Number(process.env.ADMIN_ID || 0);
+  if (!adminId) return true;
+  return Number(ctx.from?.id) === adminId;
+}
 
-export function chunk(arr, size) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
+export function errText(e) {
+  const msg = e?.message || String(e);
+  const desc = e?.response?.description || e?.description;
+  return desc ? `${msg} | ${desc}` : msg;
+}
+
+export function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
