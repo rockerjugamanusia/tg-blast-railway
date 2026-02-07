@@ -6,6 +6,7 @@ import { open } from "sqlite";
 const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const DB_FILE = process.env.DB_FILE || "blast.sqlite";
 const DB_PATH = path.join(DATA_DIR, DB_FILE);
+console.log("DB PATH =", DB_PATH);
 
 export async function initDb() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
