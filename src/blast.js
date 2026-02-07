@@ -1,64 +1,51 @@
-import { sleep, errText, isBlocked, isChatNotFound, isRateLimit, retryAfterMs } from "./utils.js";
-import { getTargets, markOk, markErr, markBlocked } from "./db.js";
+import { delay, errText } from "./utils.js";
+import { listTargets, markResult } from "./db.js";
 
-const DELAY = Number(process.env.BLAST_DELAY_MS || 120); // aman
-const PROGRESS_EVERY = Number(process.env.PROGRESS_EVERY || 25);
+function classifyError(e) {
+  const d = (e?.response?.description || "").toLowerCase();
 
-async function sendMsg(bot, chatId, text) {
-  try {
-    await bot.telegram.sendMessage(chatId, text, { disable_web_page_preview: true });
-    return { ok: true };
-  } catch (e) {
-    if (isRateLimit(e)) {
-      const waitMs = retryAfterMs(e);
-      if (waitMs) {
-        await sleep(waitMs);
-        await bot.telegram.sendMessage(chatId, text, { disable_web_page_preview: true });
-        return { ok: true, waitedMs: waitMs };
-      }
-    }
-    return { ok: false, err: e };
-  }
+  if (d.includes("bot was blocked by the user")) return "blocked";
+  if (d.includes("user is deactivated")) return "blocked";
+  if (d.includes("chat not found")) return "not_found";
+  if (d.includes("forbidden")) return "blocked";
+
+  return "fail";
 }
 
-export async function blastAll(bot, db, text, onProgress) {
-  const targets = await getTargets(db);
+export async function blastAll(bot, db, message, onProgress) {
+  const rows = await listTargets(db);
+  const total = rows.length;
 
-  const rep = {
-    total: targets.length,
-    ok: 0,
-    fail: 0,
-    blocked: 0,
-    notFound: 0
-  };
+  const gapMs = Number(process.env.BLAST_DELAY_MS || 800); // aman anti limit
 
-  for (let i = 0; i < targets.length; i++) {
-    const user_id = targets[i].user_id;
+  let ok = 0, fail = 0, blocked = 0, notFound = 0;
+  let done = 0;
 
-    const r = await sendMsg(bot, user_id, text);
+  for (const r of rows) {
+    const userId = Number(r.user_id);
 
-    if (r.ok) {
-      rep.ok++;
-      await markOk(db, user_id);
-    } else {
-      rep.fail++;
-      const t = errText(r.err);
+    try {
+      await bot.telegram.sendMessage(userId, message, { disable_web_page_preview: true });
+      ok++;
+      await markResult(db, userId, "ok", null);
+    } catch (e) {
+      const type = classifyError(e);
+      const text = errText(e);
 
-      if (isBlocked(t)) {
-        rep.blocked++;
-        await markBlocked(db, user_id, t);
-      } else {
-        if (isChatNotFound(t)) rep.notFound++;
-        await markErr(db, user_id, t);
-      }
+      if (type === "blocked") blocked++;
+      else if (type === "not_found") notFound++;
+      else fail++;
+
+      await markResult(db, userId, type, text);
     }
 
-    if (onProgress && ((i + 1) % PROGRESS_EVERY === 0 || i + 1 === targets.length)) {
-      await onProgress(i + 1, targets.length, rep);
+    done++;
+    if (onProgress && (done === 1 || done % 20 === 0 || done === total)) {
+      await onProgress(done, total, { ok, fail, blocked, notFound });
     }
 
-    await sleep(DELAY);
+    await delay(gapMs);
   }
 
-  return rep;
+  return { total, ok, fail, blocked, notFound };
 }
