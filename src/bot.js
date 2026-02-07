@@ -1,5 +1,5 @@
 import { Telegraf } from "telegraf";
-import { isAdmin, errText } from "./utils.js";
+import { isAdmin, errText, delay } from "./utils.js";
 import { upsertUser, stats, exportUsers } from "./db.js";
 import { blastAll } from "./blast.js";
 
