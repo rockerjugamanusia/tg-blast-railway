@@ -1,25 +1,29 @@
 import "dotenv/config";
-import { Telegraf } from "telegraf";
-import { setupBlastCommands } from "./blast.js"; // pastikan file ini ada
-// kalau kamu pakai db, import db init di sini (opsional)
-// import { initDb } from "./db.js";
+import { initDb } from "./db.js";
+import { createBot } from "./bot.js";
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-if (!BOT_TOKEN) throw new Error("BOT_TOKEN belum diset");
+async function main() {
+  const db = await initDb();
+  const bot = createBot(db);
 
-const bot = new Telegraf(BOT_TOKEN);
+  // IMPORTANT: polling mode (tanpa webhook)
+  // hapus webhook dulu biar tidak bentrok
+  try {
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+  } catch {}
 
-// (opsional) kalau ada init db:
-// await initDb();
+  await bot.launch({
+    dropPendingUpdates: true
+  });
 
-setupBlastCommands(bot);
+  console.log("✅ Bot polling aktif.");
 
-// ✅ POLLING (tidak butuh PUBLIC_URL)
-await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-await bot.launch();
+  // Graceful stop
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+}
 
-console.log("✅ Bot polling live");
-
-// Graceful stop
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+main().catch((e) => {
+  console.error("Fatal:", e);
+  process.exit(1);
+});
