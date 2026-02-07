@@ -1,49 +1,83 @@
-// src/blast.js
-export function setupBlastCommands(bot) {
-  const ADMIN_ID = Number(process.env.ADMIN_ID || 0);
+import { sleep, pickErrorText, isBlockedError, isChatNotFound, isRateLimit, retryAfterMs } from "./utils.js";
+import { getBlastTargets, markOk, markErr, markBlocked } from "./db.js";
 
-  function isAdmin(ctx) {
-    if (!ADMIN_ID) return true; // kalau ADMIN_ID kosong, semua boleh (opsional)
-    return ctx.from?.id === ADMIN_ID;
+const DEFAULT_DELAY_MS = Number(process.env.BLAST_DELAY_MS || 80); // aman: ~12 msg/detik
+const MAX_FAILS_STOP = Number(process.env.BLAST_MAX_FAILS_STOP || 0); // 0 = jangan stop
+
+async function sendWithRetry(bot, chatId, text) {
+  try {
+    await bot.telegram.sendMessage(chatId, text, { disable_web_page_preview: true });
+    return { ok: true };
+  } catch (err) {
+    // rate limit 429 → tunggu lalu retry sekali
+    if (isRateLimit(err)) {
+      const waitMs = retryAfterMs(err);
+      if (waitMs > 0) {
+        await sleep(waitMs);
+        await bot.telegram.sendMessage(chatId, text, { disable_web_page_preview: true });
+        return { ok: true, waitedMs: waitMs };
+      }
+    }
+    return { ok: false, err };
   }
+}
 
-  // /start
-  bot.start(async (ctx) => {
-    await ctx.reply(
-      "✅ Bot Blast Aktif.\n\nPerintah:\n/blast <chat_id> <pesan>\n/blastall <pesan>\n\nContoh:\n/blast -1001234567890 Halo semua"
-    );
-  });
+export async function blastAll({ bot, db, text, onProgress }) {
+  const targets = await getBlastTargets(db);
 
-  // /blast <chat_id> <pesan>
-  bot.command("blast", async (ctx) => {
-    try {
-      if (!isAdmin(ctx)) return;
+  const report = {
+    total: targets.length,
+    ok: 0,
+    fail: 0,
+    blocked: 0,
+    notFound: 0,
+    details: [], // simpan ringkas
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+  };
 
-      const text = ctx.message?.text || "";
-      const parts = text.split(" ");
-      const chatId = parts[1];
-      const msg = parts.slice(2).join(" ").trim();
+  let failsInRow = 0;
 
-      if (!chatId || !msg) {
-        return ctx.reply("Format salah.\n/blast <chat_id> <pesan>");
+  for (let i = 0; i < targets.length; i++) {
+    const user_id = targets[i].user_id;
+
+    const res = await sendWithRetry(bot, user_id, text);
+
+    if (res.ok) {
+      report.ok++;
+      failsInRow = 0;
+      await markOk(db, user_id);
+    } else {
+      report.fail++;
+      failsInRow++;
+      const errText = pickErrorText(res.err);
+
+      if (isBlockedError(errText)) {
+        report.blocked++;
+        await markBlocked(db, user_id, errText);
+      } else if (isChatNotFound(errText)) {
+        report.notFound++;
+        // chat not found sering berarti user belum start / ID salah
+        await markErr(db, user_id, errText);
+      } else {
+        await markErr(db, user_id, errText);
       }
 
-      await bot.telegram.sendMessage(chatId, msg);
-      await ctx.reply("✅ Terkirim.");
-    } catch (e) {
-      await ctx.reply("❌ Gagal: " + (e?.message || String(e)));
+      report.details.push({ user_id, err: errText.slice(0, 120) });
     }
-  });
 
-  // /blastall <pesan>  (dummy: nanti sambung DB list target)
-  bot.command("blastall", async (ctx) => {
-    if (!isAdmin(ctx)) return;
+    if (typeof onProgress === "function") {
+      await onProgress({ i: i + 1, total: targets.length, report });
+    }
 
-    const text = ctx.message?.text || "";
-    const msg = text.replace("/blastall", "").trim();
-    if (!msg) return ctx.reply("Format salah.\n/blastall <pesan>");
+    if (MAX_FAILS_STOP > 0 && failsInRow >= MAX_FAILS_STOP) {
+      report.details.push({ system: true, err: `Stop: ${failsInRow} gagal berturut-turut` });
+      break;
+    }
 
-    // TODO: Ambil list chat_id dari DB
-    return ctx.reply("⚠️ blastall belum disambung ke database target.\nTapi command sudah hidup.");
-  });
+    await sleep(DEFAULT_DELAY_MS);
+  }
+
+  report.finishedAt = new Date().toISOString();
+  return report;
 }
