@@ -1,26 +1,14 @@
-import "dotenv/config";
 import { createBot } from "./bot.js";
-import { openDB } from "./db.js";
-import { createBot } from "./bot.js";
+import { openDb } from "./db.js";
 
-const db = await openDB();
+const db = openDb();
 const bot = createBot(db);
 
-await bot.launch();
-console.log("🚀 Bot Blast running (polling)");
+// polling (tanpa webhook)
+bot.launch();
 
-const bot = createBot();
+console.log("✅ Bot running (polling)");
 
-bot.catch((err, ctx) => {
-  console.error("BOT_ERROR", err);
-});
-
-process.on("unhandledRejection", (e) => console.error("unhandledRejection", e));
-process.on("uncaughtException", (e) => console.error("uncaughtException", e));
-
-bot.launch({ dropPendingUpdates: true }).then(() => {
-  console.log("✅ Bot polling aktif");
-});
-
+// graceful stop
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
