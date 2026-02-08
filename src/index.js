@@ -1,5 +1,13 @@
 import "dotenv/config";
 import { createBot } from "./bot.js";
+import { openDB } from "./db.js";
+import { createBot } from "./bot.js";
+
+const db = await openDB();
+const bot = createBot(db);
+
+await bot.launch();
+console.log("🚀 Bot Blast running (polling)");
 
 const bot = createBot();
 
