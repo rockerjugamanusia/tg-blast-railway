@@ -1,88 +1,87 @@
+import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
-import sqlite3 from "sqlite3";
-import { open } from "sqlite";
 
-export async function openDb() {
-  const dataDir = process.env.DATA_DIR || "/app/data";
-  const dbFile = process.env.DB_FILE || "blast.sqlite";
-  fs.mkdirSync(dataDir, { recursive: true });
+export function openDb() {
+  const DATA_DIR = process.env.DATA_DIR || "/app/data";
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 
-  const dbPath = path.join(dataDir, dbFile);
+  const DB_FILE = process.env.DB_FILE || "blast.sqlite";
+  const dbPath = path.join(DATA_DIR, DB_FILE);
 
-  const db = await open({
-    filename: dbPath,
-    driver: sqlite3.Database,
-  });
+  const db = new Database(dbPath);
+  db.pragma("journal_mode = WAL");
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      user_id     INTEGER PRIMARY KEY,
-      username    TEXT,
-      first_name  TEXT,
-      last_name   TEXT,
-      started     INTEGER DEFAULT 0,
-      status      TEXT DEFAULT 'ok',         -- ok | blocked | not_found | fail
-      last_error  TEXT,
-      created_at  TEXT DEFAULT (datetime('now')),
-      updated_at  TEXT DEFAULT (datetime('now'))
+      user_id INTEGER PRIMARY KEY,
+      username TEXT,
+      first_name TEXT,
+      last_name TEXT,
+      started_at TEXT,
+      last_ok_at TEXT,
+      blocked INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS blast_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT DEFAULT (datetime('now')),
+      target_id INTEGER,
+      status TEXT,
+      error TEXT
     );
   `);
 
   return db;
 }
 
-export async function upsertUser(db, from) {
-  if (!from?.id) return;
-
-  const user_id = Number(from.id);
-  const username = from.username || null;
-  const first_name = from.first_name || null;
-  const last_name = from.last_name || null;
-
-  await db.run(
-    `
-    INSERT INTO users (user_id, username, first_name, last_name, started, updated_at)
-    VALUES (?, ?, ?, ?, 1, datetime('now'))
+export function upsertUser(db, from) {
+  const stmt = db.prepare(`
+    INSERT INTO users (user_id, username, first_name, last_name, started_at)
+    VALUES (@id, @username, @first_name, @last_name, datetime('now'))
     ON CONFLICT(user_id) DO UPDATE SET
       username=excluded.username,
       first_name=excluded.first_name,
-      last_name=excluded.last_name,
-      started=1,
-      updated_at=datetime('now');
-    `,
-    [user_id, username, first_name, last_name]
-  );
+      last_name=excluded.last_name
+  `);
+  stmt.run({
+    id: from.id,
+    username: from.username || null,
+    first_name: from.first_name || null,
+    last_name: from.last_name || null
+  });
 }
 
-export async function markResult(db, userId, status, lastError = null) {
-  await db.run(
-    `
-    UPDATE users
-    SET status=?, last_error=?, updated_at=datetime('now')
-    WHERE user_id=?;
-    `,
-    [status, lastError, Number(userId)]
-  );
+export function markBlocked(db, userId, blocked) {
+  db.prepare(`UPDATE users SET blocked=? WHERE user_id=?`).run(blocked ? 1 : 0, userId);
 }
 
-export async function listTargets(db) {
-  // hanya yang sudah pernah /start
-  return db.all(`SELECT user_id FROM users WHERE started=1`);
+export function markOk(db, userId) {
+  db.prepare(`UPDATE users SET last_ok_at=datetime('now') WHERE user_id=?`).run(userId);
 }
 
-export async function stats(db) {
-  const total = (await db.get(`SELECT COUNT(*) as c FROM users`))?.c || 0;
-  const started = (await db.get(`SELECT COUNT(*) as c FROM users WHERE started=1`))?.c || 0;
-
-  const ok = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='ok'`))?.c || 0;
-  const blocked = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='blocked'`))?.c || 0;
-  const not_found = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='not_found'`))?.c || 0;
-  const fail = (await db.get(`SELECT COUNT(*) as c FROM users WHERE status='fail'`))?.c || 0;
-
-  return { total, started, ok, blocked, notFound: not_found, fail };
+export function insertLog(db, targetId, status, error = null) {
+  db.prepare(`INSERT INTO blast_logs (target_id, status, error) VALUES (?, ?, ?)`)
+    .run(targetId, status, error);
 }
 
-export async function exportUsers(db) {
-  return db.all(`SELECT * FROM users ORDER BY updated_at DESC`);
+export function getStartedUsers(db) {
+  return db.prepare(`SELECT user_id FROM users WHERE started_at IS NOT NULL AND blocked=0`).all();
+}
+
+export function importUserIds(db, ids) {
+  const ins = db.prepare(`
+    INSERT INTO users (user_id)
+    VALUES (?)
+    ON CONFLICT(user_id) DO NOTHING
+  `);
+  const tx = db.transaction((arr) => arr.forEach((id) => ins.run(id)));
+  tx(ids);
+}
+
+export function stats(db) {
+  const total = db.prepare(`SELECT COUNT(*) c FROM users`).get().c;
+  const started = db.prepare(`SELECT COUNT(*) c FROM users WHERE started_at IS NOT NULL`).get().c;
+  const blocked = db.prepare(`SELECT COUNT(*) c FROM users WHERE blocked=1`).get().c;
+  return { total, started, blocked };
 }
