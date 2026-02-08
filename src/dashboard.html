@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Blast Dashboard</title>
+  <style>
+    body{font-family:Arial;margin:20px;max-width:900px}
+    textarea,input{width:100%;padding:10px;margin:6px 0}
+    button{padding:10px 14px;cursor:pointer}
+    .row{display:flex;gap:10px}
+    .row > div{flex:1}
+    pre{background:#111;color:#0f0;padding:10px;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <h2>Telegram Blast Dashboard</h2>
+
+  <div class="row">
+    <div>
+      <label>ADMIN_KEY</label>
+      <input id="key" placeholder="isi ADMIN_KEY" />
+    </div>
+    <div>
+      <label>Delay (ms)</label>
+      <input id="delay" value="800" />
+    </div>
+  </div>
+
+  <label>List User ID (1 baris 1 id)</label>
+  <textarea id="ids" rows="10" placeholder="123\n456\n789"></textarea>
+
+  <label>Pesan</label>
+  <textarea id="msg" rows="6" placeholder="Tulis pesan..."></textarea>
+
+  <button onclick="blast()">BLAST</button>
+  <button onclick="loadStarted()">Load Started Users (dari DB)</button>
+
+  <h3>Output</h3>
+  <pre id="out">Siap.</pre>
+
+<script>
+async function blast(){
+  const key = document.getElementById("key").value.trim();
+  const delayMs = Number(document.getElementById("delay").value || 800);
+  const ids = document.getElementById("ids").value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const message = document.getElementById("msg").value;
+
+  if(!key) return out("ADMIN_KEY wajib diisi");
+  if(!message) return out("Pesan wajib diisi");
+  if(ids.length === 0) return out("User ID kosong");
+
+  out("Mengirim...");
+  const r = await fetch("/api/blast", {
+    method:"POST",
+    headers: {"Content-Type":"application/json","X-Admin-Key": key},
+    body: JSON.stringify({ ids, message, delayMs })
+  });
+  const j = await r.json().catch(()=>({error:"bad json"}));
+  out(JSON.stringify(j,null,2));
+}
+
+async function loadStarted(){
+  const key = document.getElementById("key").value.trim();
+  if(!key) return out("ADMIN_KEY wajib diisi");
+  out("Mengambil started users...");
+  const r = await fetch("/api/started-users", {
+    headers: {"X-Admin-Key": key}
+  });
+  const j = await r.json();
+  document.getElementById("ids").value = (j.ids || []).join("\n");
+  out("Loaded: " + (j.ids||[]).length);
+}
+
+function out(t){ document.getElementById("out").textContent = t; }
+</script>
+</body>
+</html>

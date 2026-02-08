@@ -1,73 +1,21 @@
 import { Telegraf } from "telegraf";
-import { isAdmin, errText } from "./utils.js";
-import { upsertUser, stats as dbStats, exportUsers } from "./db.js";
-import { blastAll } from "./blast.js";
-import { delay } from "./utils.js";
+import { mustEnv } from "./utils.js";
+import { upsertUser, stats as dbStats } from "./db.js";
 
 export function createBot(db) {
-  const token = process.env.BOT_TOKEN;
-  if (!token) throw new Error("BOT_TOKEN belum diset");
-
-  const bot = new Telegraf(token);
+  const BOT_TOKEN = mustEnv("BOT_TOKEN");
+  const bot = new Telegraf(BOT_TOKEN);
 
   bot.start(async (ctx) => {
-    await upsertUser(db, ctx.from);
-    await ctx.reply(
-      "✅ Bot Blast Aktif.\n\nPerintah:\n/stats\n/exportusers\n/blast <chat_id> <pesan>\n/blastall <pesan>\n",
-      { disable_web_page_preview: true }
-    );
+    upsertUser(db, ctx.from);
+    await ctx.reply("✅ Bot aktif. Kamu sudah terdaftar (start).");
   });
 
   bot.command("stats", async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const s = await dbStats(db);
-    await ctx.reply(
-      `📊 Stats\nTotal: ${s.total}\nPernah /start: ${s.started}\nOK: ${s.ok}\nBlocked: ${s.blocked}\nChat not found: ${s.notFound}\nFail: ${s.fail}`
-    );
-  });
-
-  bot.command("exportusers", async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const rows = await exportUsers(db);
-    const json = JSON.stringify(rows, null, 2);
-    await ctx.replyWithDocument({ source: Buffer.from(json), filename: "users.json" });
-  });
-
-  bot.command("blast", async (ctx) => {
-    if (!isAdmin(ctx)) return;
-
-    const text = ctx.message?.text || "";
-    const parts = text.split(" ").filter(Boolean);
-    if (parts.length < 3) return ctx.reply("Format: /blast <chat_id> <pesan>");
-
-    const chatId = Number(parts[1]);
-    const msg = parts.slice(2).join(" ");
-
-    try {
-      await ctx.reply("⏳ Mengirim...");
-      await ctx.telegram.sendMessage(chatId, msg, { disable_web_page_preview: true });
-      await ctx.reply("✅ Sukses.");
-    } catch (e) {
-      await ctx.reply("❌ Gagal: " + errText(e));
-    }
-  });
-
-  bot.command("blastall", async (ctx) => {
-    if (!isAdmin(ctx)) return;
-
-    const raw = ctx.message?.text || "";
-    const msg = raw.replace(/^\/blastall(@\w+)?\s*/i, "");
-    if (!msg) return ctx.reply("Format: /blastall <pesan>");
-
-    await ctx.reply("⏳ Blast mulai...");
-
-    const rep = await blastAll(bot, db, msg, async (done, total, r) => {
-      await ctx.reply(`📤 ${done}/${total} | ✅${r.ok} ❌${r.fail} 🚫${r.blocked} 🕳️${r.notFound}`);
-    });
-
-    await ctx.reply(
-      `✅ Blast selesai\nTotal: ${rep.total}\nSukses: ${rep.ok}\nGagal: ${rep.fail}\nBlocked: ${rep.blocked}\nChat not found: ${rep.notFound}`
-    );
+    const ADMIN_ID = Number(process.env.ADMIN_ID || 0);
+    if (ADMIN_ID && ctx.from?.id !== ADMIN_ID) return;
+    const s = dbStats(db);
+    await ctx.reply(`📊 Users\nTotal: ${s.total}\nPernah /start: ${s.started}\nBlocked: ${s.blocked}`);
   });
 
   return bot;
