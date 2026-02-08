@@ -1,12 +1,18 @@
+import path from "path";
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
+import fs from "fs";
 
-const DB_PATH = process.env.DB_FILE || "./data/users.sqlite";
+const DATA_DIR = process.env.DATA_DIR || "/app/data";
+const DB_FILE = process.env.DB_FILE || "blast.sqlite";
+const DB_PATH = path.join(DATA_DIR, DB_FILE);
 
-export async function openDB() {
+export async function openDb() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+
   const db = await open({
     filename: DB_PATH,
-    driver: sqlite3.Database
+    driver: sqlite3.Database,
   });
 
   await db.exec(`
@@ -15,45 +21,35 @@ export async function openDB() {
       username TEXT,
       first_name TEXT,
       last_name TEXT,
-      started INTEGER DEFAULT 0,
-      blocked INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
     );
   `);
 
   return db;
 }
 
-export async function upsertUser(db, u) {
-  if (!u?.id) return;
+export async function upsertUser(db, from) {
+  const user_id = from?.id;
+  if (!user_id) return;
+
   await db.run(
-    `
-    INSERT INTO users (user_id, username, first_name, last_name, started)
-    VALUES (?, ?, ?, ?, 1)
-    ON CONFLICT(user_id) DO UPDATE SET
-      username=excluded.username,
-      first_name=excluded.first_name,
-      last_name=excluded.last_name,
-      started=1,
-      updated_at=CURRENT_TIMESTAMP
-    `,
-    [u.id, u.username, u.first_name, u.last_name]
+    `INSERT INTO users (user_id, username, first_name, last_name, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET
+       username=excluded.username,
+       first_name=excluded.first_name,
+       last_name=excluded.last_name,
+       updated_at=datetime('now')`,
+    [user_id, from.username || null, from.first_name || null, from.last_name || null]
   );
 }
 
-export async function stats(db) {
-  const total = (await db.get(`SELECT COUNT(*) c FROM users`)).c;
-  const started = (await db.get(`SELECT COUNT(*) c FROM users WHERE started=1`)).c;
-  const blocked = (await db.get(`SELECT COUNT(*) c FROM users WHERE blocked=1`)).c;
-  const active = total - blocked;
-  return { total, started, blocked, active };
-}
-
 export async function exportUsers(db) {
-  return db.all(`SELECT * FROM users WHERE started=1 AND blocked=0`);
+  return db.all(`SELECT * FROM users ORDER BY updated_at DESC`);
 }
 
-export async function markBlocked(db, userId) {
-  await db.run(`UPDATE users SET blocked=1 WHERE user_id=?`, [userId]);
+export async function stats(db) {
+  const total = (await db.get(`SELECT COUNT(*) as c FROM users`)).c;
+  return { total, started: total, active: total, blocked: 0 };
 }
