@@ -28,7 +28,10 @@ export function createBot() {
   });
 
   bot.command("stats", async (ctx) => {
-    if (!isAdminTelegram(ctx)) return;
+   if (!isAdminTelegram(ctx)) {
+  return ctx.reply(`⛔ Bukan admin. ID kamu: ${ctx.from?.id}`);
+}
+
     const s = statsUsers();
     await ctx.reply(
       `📊 Stats\nTotal tersimpan: ${s.total}\nPernah /start: ${s.started}\nBlocked: ${s.blocked}\nChat not found: ${s.notFound}`
@@ -36,14 +39,20 @@ export function createBot() {
   });
 
   bot.command("exportusers", async (ctx) => {
-    if (!isAdminTelegram(ctx)) return;
+    if (!isAdminTelegram(ctx)) {
+  return ctx.reply(`⛔ Bukan admin. ID kamu: ${ctx.from?.id}`);
+}
+
     const rows = loadUsers();
     const json = JSON.stringify(rows, null, 2);
     await ctx.replyWithDocument({ source: Buffer.from(json), filename: "users.json" });
   });
 
   bot.command("blast", async (ctx) => {
-    if (!isAdminTelegram(ctx)) return;
+    if (!isAdminTelegram(ctx)) {
+  return ctx.reply(`⛔ Bukan admin. ID kamu: ${ctx.from?.id}`);
+}
+
 
     const text = ctx.message?.text || "";
     const parts = text.split(" ").filter(Boolean);
@@ -63,7 +72,10 @@ export function createBot() {
 
   // blast banyak id dari command
   bot.command("blastids", async (ctx) => {
-    if (!isAdminTelegram(ctx)) return;
+    if (!isAdminTelegram(ctx)) {
+  return ctx.reply(`⛔ Bukan admin. ID kamu: ${ctx.from?.id}`);
+}
+
 
     const raw = ctx.message?.text || "";
     const cleaned = raw.replace(/^\/blastids(@\w+)?\s*/i, "");
@@ -89,7 +101,10 @@ export function createBot() {
   });
 
   bot.command("blastall", async (ctx) => {
-    if (!isAdminTelegram(ctx)) return;
+    if (!isAdminTelegram(ctx)) {
+  return ctx.reply(`⛔ Bukan admin. ID kamu: ${ctx.from?.id}`);
+}
+
 
     const raw = ctx.message?.text || "";
     const msg = raw.replace(/^\/blastall(@\w+)?\s*/i, "");
