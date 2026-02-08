@@ -1,25 +1,18 @@
 import "dotenv/config";
 import { createBot } from "./bot.js";
-import { createDashboard } from "./dashboard.js";
 
 const bot = createBot();
 
-// polling mode
-await bot.launch({
-  dropPendingUpdates: true
+bot.catch((err, ctx) => {
+  console.error("BOT_ERROR", err);
 });
 
-console.log("✅ Bot polling berjalan");
+process.on("unhandledRejection", (e) => console.error("unhandledRejection", e));
+process.on("uncaughtException", (e) => console.error("uncaughtException", e));
 
-// Railway butuh listen PORT supaya service dianggap hidup
-const PORT = Number(process.env.PORT || 3000);
-const app = createDashboard(bot);
-
-app.listen(PORT, () => {
-  console.log(`✅ Dashboard hidup di port ${PORT}`);
-  console.log("Buka: https://<domain-railway>/?key=ADMIN_KEY");
+bot.launch({ dropPendingUpdates: true }).then(() => {
+  console.log("✅ Bot polling aktif");
 });
 
-// graceful stop
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
