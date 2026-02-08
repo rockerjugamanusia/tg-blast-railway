@@ -1,5 +1,5 @@
 {
-  "name": "tg-blast-dashboard",
+  "name": "tg-blast-railway",
   "version": "1.0.0",
   "type": "module",
   "main": "src/index.js",
@@ -7,7 +7,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.5.0",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "telegraf": "^4.16.3"
   }

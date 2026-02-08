@@ -1,24 +1,25 @@
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
-
-import { openDb } from "./db.js";
+import "dotenv/config";
 import { createBot } from "./bot.js";
+import { createDashboard } from "./dashboard.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const bot = createBot();
 
-const db = openDb();
-const bot = createBot(db);
-
-const app = express();
-app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.send("Dashboard aktif");
+// polling mode
+await bot.launch({
+  dropPendingUpdates: true
 });
 
-const PORT = Number(process.env.PORT || 3000);
-app.listen(PORT, () => console.log("Web running on", PORT));
+console.log("✅ Bot polling berjalan");
 
-bot.launch();
+// Railway butuh listen PORT supaya service dianggap hidup
+const PORT = Number(process.env.PORT || 3000);
+const app = createDashboard(bot);
+
+app.listen(PORT, () => {
+  console.log(`✅ Dashboard hidup di port ${PORT}`);
+  console.log("Buka: https://<domain-railway>/?key=ADMIN_KEY");
+});
+
+// graceful stop
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));

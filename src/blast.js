@@ -1,51 +1,87 @@
-import { delay, errText } from "./utils.js";
-import { listTargets, markResult } from "./db.js";
+import { sleep } from "./utils.js";
+import { loadUsers, saveUsers } from "./storage.js";
 
-function classifyError(e) {
-  const d = (e?.response?.description || "").toLowerCase();
+// klasifikasi error Telegram
+function classifyTelegramError(e) {
+  const code = e?.response?.error_code;
+  const desc = (e?.response?.description || e?.message || "").toLowerCase();
 
-  if (d.includes("bot was blocked by the user")) return "blocked";
-  if (d.includes("user is deactivated")) return "blocked";
-  if (d.includes("chat not found")) return "not_found";
-  if (d.includes("forbidden")) return "blocked";
-
-  return "fail";
+  if (code === 429) return { type: "rate_limit", retryAfter: e?.response?.parameters?.retry_after || 2 };
+  if (desc.includes("bot was blocked by the user")) return { type: "blocked" };
+  if (desc.includes("user is deactivated")) return { type: "blocked" };
+  if (desc.includes("chat not found")) return { type: "not_found" };
+  if (desc.includes("bad request: chat not found")) return { type: "not_found" };
+  return { type: "other" };
 }
 
-export async function blastAll(bot, db, message, onProgress) {
-  const rows = await listTargets(db);
-  const total = rows.length;
+async function sendWithRetry(sendFn, opts = {}) {
+  const { maxRetry = 3 } = opts;
 
-  const gapMs = Number(process.env.BLAST_DELAY_MS || 800); // aman anti limit
-
-  let ok = 0, fail = 0, blocked = 0, notFound = 0;
-  let done = 0;
-
-  for (const r of rows) {
-    const userId = Number(r.user_id);
-
+  for (let i = 0; i <= maxRetry; i++) {
     try {
-      await bot.telegram.sendMessage(userId, message, { disable_web_page_preview: true });
-      ok++;
-      await markResult(db, userId, "ok", null);
+      return { ok: true, res: await sendFn() };
     } catch (e) {
-      const type = classifyError(e);
-      const text = errText(e);
+      const c = classifyTelegramError(e);
 
-      if (type === "blocked") blocked++;
-      else if (type === "not_found") notFound++;
-      else fail++;
+      if (c.type === "rate_limit") {
+        const wait = (Number(c.retryAfter) || 2) * 1000;
+        await sleep(wait);
+        continue;
+      }
 
-      await markResult(db, userId, type, text);
+      return { ok: false, err: e, class: c.type };
+    }
+  }
+  return { ok: false, err: new Error("retry_exceeded"), class: "other" };
+}
+
+export async function blastToIds(telegram, ids, message, options = {}) {
+  const delayMs = Number(options.delayMs ?? process.env.BLAST_DELAY_MS ?? 600); // default 600ms
+  const reportEvery = Number(options.reportEvery ?? 25);
+
+  let ok = 0, fail = 0, blocked = 0, notFound = 0, total = 0;
+
+  const users = loadUsers();
+  const map = new Map(users.map((u) => [Number(u.user_id), u]));
+
+  for (const raw of ids) {
+    const chatId = Number(raw);
+    if (!Number.isFinite(chatId) || chatId <= 0) continue;
+
+    total++;
+
+    const result = await sendWithRetry(
+      () => telegram.sendMessage(chatId, message, { disable_web_page_preview: true }),
+      { maxRetry: 3 }
+    );
+
+    const u = map.get(chatId);
+
+    if (result.ok) {
+      ok++;
+      if (u) u.status = "ok";
+    } else {
+      fail++;
+      if (result.class === "blocked") { blocked++; if (u) u.status = "blocked"; }
+      else if (result.class === "not_found") { notFound++; if (u) u.status = "not_found"; }
+      else { if (u) u.status = "fail"; }
     }
 
-    done++;
-    if (onProgress && (done === 1 || done % 20 === 0 || done === total)) {
-      await onProgress(done, total, { ok, fail, blocked, notFound });
+    if (total % reportEvery === 0 && options.onProgress) {
+      options.onProgress({ done: total, ok, fail, blocked, notFound });
     }
 
-    await delay(gapMs);
+    await sleep(delayMs);
   }
 
+  // simpan update status
+  saveUsers(Array.from(map.values()));
+
   return { total, ok, fail, blocked, notFound };
+}
+
+export async function blastAllStarted(telegram, message, options = {}) {
+  const users = loadUsers();
+  const targets = users.filter((u) => !!u.started_at).map((u) => Number(u.user_id));
+  return blastToIds(telegram, targets, message, options);
 }
