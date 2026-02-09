@@ -9,7 +9,7 @@ export function createBot(db) {
   bot.start(async (ctx) => {
     await upsertUser(db, ctx.from);
     await ctx.reply(
-      "✅ Bot Blast Aktif\n\nPerintah:\n/stats\n/exportusers\n/blastall <pesan>"
+      "✅SELAMAT DATANG DI BOT BACKUP STAY TERUS YA ❤️"
     );
   });
 
